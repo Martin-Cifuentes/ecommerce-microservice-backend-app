@@ -113,6 +113,8 @@ services:
       - EUREKA_CLIENT_SERVICEURL_MYZONE=http://service-discoverycontainer:8761/eureka
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://service-discoverycontainer:8761/eureka/
       - SPRING_CONFIG_IMPORT=optional:configserver:http://cloud-configcontainer:9296/
-
+networks:
+  microservices_network:
+    driver: bridge
 
 
