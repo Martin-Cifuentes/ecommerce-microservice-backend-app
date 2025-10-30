@@ -1,0 +1,27 @@
+# cloud-config/src/test/resources/application-test.yml
+server:
+  port: 0
+
+spring:
+  application:
+    name: cloud-config-test
+  cloud:
+    config:
+      server:
+        git:
+          uri: file:///tmp/config-repo-test
+          default-label: main
+          clone-on-start: false  # Desactivar para tests
+          basedir: ${java.io.tmpdir}/config-repo-test
+
+eureka:
+  client:
+    enabled: false
+    register-with-eureka: false
+    fetch-registry: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

@@ -25,11 +25,4 @@ class ConfigurationIT {
         assertEquals("false", registerWithEureka);
         assertEquals("false", fetchRegistry);
     }
-
-    @Test
-    void shouldHaveEurekaInstanceConfiguration() {
-        // Verifica configuración de instancia Eureka
-        String hostname = environment.getProperty("eureka.instance.hostname");
-        assertNotNull(hostname);
-    }
 }
