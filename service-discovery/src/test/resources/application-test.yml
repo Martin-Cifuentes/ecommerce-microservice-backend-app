@@ -1,0 +1,37 @@
+# service-discovery/src/test/resources/application-test.yml
+server:
+  port: 0  # Puerto aleatorio para tests
+
+eureka:
+  client:
+    register-with-eureka: false
+    fetch-registry: false
+    service-url:
+      defaultZone: http://localhost:${server.port}/eureka/
+  instance:
+    hostname: localhost
+    prefer-ip-address: false
+
+spring:
+  application:
+    name: service-discovery-test
+  main:
+    web-application-type: servlet
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+    metrics:
+      enabled: true
+
+logging:
+  level:
+    com.netflix.eureka: WARN
+    com.netflix.discovery: WARN
+    com.selimhorri.app: DEBUG
+    org.springframework: WARN
