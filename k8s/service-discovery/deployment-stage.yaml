@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-discovery
+  namespace: ${KUBERNETES_NAMESPACE}
+  labels:
+    app: service-discovery
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8761
+      targetPort: 8761
+      protocol: TCP
+      name: http
+  selector:
+    app: service-discovery
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-discovery
+  namespace: ${KUBERNETES_NAMESPACE}
+  labels:
+    app: service-discovery
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: service-discovery
+  template:
+    metadata:
+      labels:
+        app: service-discovery
+    spec:
+      containers:
+      - name: service-discovery
+        image: ${DOCKER_IMAGE}:${PROJECT_VERSION}
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8761
+          name: http
+        env:
+        - name: SPRING_PROFILES_ACTIVE
+          value: "stage"
+        - name: SPRING_ZIPKIN_BASE_URL
+          value: "http://zipkin:9411"
+        livenessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8761
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8761
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+

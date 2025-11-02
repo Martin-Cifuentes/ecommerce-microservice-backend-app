@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-service
+  namespace: ${KUBERNETES_NAMESPACE}
+  labels:
+    app: payment-service
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8400
+      targetPort: 8400
+      protocol: TCP
+      name: http
+  selector:
+    app: payment-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: ${KUBERNETES_NAMESPACE}
+  labels:
+    app: payment-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: payment-service
+  template:
+    metadata:
+      labels:
+        app: payment-service
+    spec:
+      containers:
+      - name: payment-service
+        image: ${DOCKER_IMAGE}:${PROJECT_VERSION}
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8400
+          name: http
+        env:
+        - name: SPRING_PROFILES_ACTIVE
+          value: "stage"
+        - name: SPRING_ZIPKIN_BASE_URL
+          value: "http://zipkin:9411"
+        - name: SPRING_CONFIG_IMPORT
+          value: "optional:configserver:http://cloud-config:9296/"
+        - name: SPRING_CLOUD_CONFIG_URI
+          value: "http://cloud-config:9296"
+        - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
+          value: "http://service-discovery:8761/eureka/"
+        - name: EUREKA_CLIENT_REGISTER_WITH_EUREKA
+          value: "true"
+        - name: EUREKA_CLIENT_FETCH_REGISTRY
+          value: "true"
+        - name: SPRING_JPA_HIBERNATE_DDL_AUTO
+          value: "update"
+        - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS
+          value: "true"
+        - name: EUREKA_INSTANCE_HOSTNAME
+          value: "payment-service"
+        - name: EUREKA_INSTANCE_NON_SECURE_PORT
+          value: "8400"
+        livenessProbe:
+          httpGet:
+            path: /payment-service/actuator/health
+            port: 8400
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /payment-service/actuator/health
+            port: 8400
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+
