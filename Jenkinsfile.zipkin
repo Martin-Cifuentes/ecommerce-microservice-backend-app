@@ -1,0 +1,91 @@
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'stage', 'master'],
+            description: 'Selecciona el ambiente'
+        )
+    }
+    
+    environment {
+        ZIPKIN_IMAGE = 'openzipkin/zipkin:latest'
+        KUBERNETES_NAMESPACE = "${params.ENVIRONMENT}"
+        KUBECONFIG = credentials('kubeconfig') ?: ''
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        
+        stage('Pull Zipkin Image') {
+            steps {
+                script {
+                    sh """
+                        docker pull ${ZIPKIN_IMAGE}
+                    """
+                }
+            }
+        }
+        
+        stage('Deploy Zipkin to Kubernetes') {
+            when {
+                anyOf {
+                    expression { params.ENVIRONMENT == 'stage' }
+                    expression { params.ENVIRONMENT == 'master' }
+                }
+            }
+            steps {
+                script {
+                    sh """
+                        kubectl create namespace ${KUBERNETES_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+                        envsubst < k8s/zipkin/deployment.yaml | kubectl apply -f -
+                        kubectl rollout status deployment/zipkin -n ${KUBERNETES_NAMESPACE} --timeout=5m
+                    """
+                }
+            }
+        }
+        
+        stage('Verify Zipkin Deployment') {
+            when {
+                anyOf {
+                    expression { params.ENVIRONMENT == 'stage' }
+                    expression { params.ENVIRONMENT == 'master' }
+                }
+            }
+            steps {
+                script {
+                    sh """
+                        sleep 30
+                        kubectl wait --for=condition=ready pod -l app=zipkin -n ${KUBERNETES_NAMESPACE} --timeout=300s || true
+                        
+                        SERVICE_URL=\$(kubectl get svc zipkin -n ${KUBERNETES_NAMESPACE} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' || echo "")
+                        if [ -z "\$SERVICE_URL" ]; then
+                            SERVICE_URL=\$(kubectl get svc zipkin -n ${KUBERNETES_NAMESPACE} -o jsonpath='{.spec.clusterIP}')
+                        fi
+                        
+                        # Verificar que Zipkin está respondiendo
+                        curl -f http://\$SERVICE_URL:9411 || exit 1
+                    """
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo "✅ Zipkin desplegado exitosamente en ambiente ${params.ENVIRONMENT}"
+        }
+        failure {
+            echo "❌ Fallo al desplegar Zipkin en ambiente ${params.ENVIRONMENT}"
+            sh """
+                kubectl logs -l app=zipkin -n ${KUBERNETES_NAMESPACE} --tail=50 || true
+            """
+        }
+    }
+}
+

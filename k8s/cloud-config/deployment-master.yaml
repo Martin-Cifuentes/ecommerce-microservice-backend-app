@@ -1,0 +1,78 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloud-config
+  namespace: ${KUBERNETES_NAMESPACE}
+  labels:
+    app: cloud-config
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 9296
+      targetPort: 9296
+      protocol: TCP
+      name: http
+  selector:
+    app: cloud-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloud-config
+  namespace: ${KUBERNETES_NAMESPACE}
+  labels:
+    app: cloud-config
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: cloud-config
+  template:
+    metadata:
+      labels:
+        app: cloud-config
+    spec:
+      containers:
+      - name: cloud-config
+        image: ${DOCKER_IMAGE}:${PROJECT_VERSION}
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 9296
+          name: http
+        env:
+        - name: SPRING_PROFILES_ACTIVE
+          value: "prod"
+        - name: SPRING_ZIPKIN_BASE_URL
+          value: "http://zipkin:9411"
+        - name: EUREKA_CLIENT_REGION
+          value: "default"
+        - name: EUREKA_CLIENT_AVAILABILITY_ZONES_DEFAULT
+          value: "myzone"
+        - name: EUREKA_CLIENT_AVAILABILITYZONES_DEFAULT
+          value: "myzone"
+        - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
+          value: "http://service-discovery:8761/eureka/"
+        livenessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 9296
+          initialDelaySeconds: 90
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 9296
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+
