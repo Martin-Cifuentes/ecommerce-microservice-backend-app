@@ -1,0 +1,5 @@
+version: '3.8'
+services:
+  alpine:
+    image: alpine:latest
+    command: sleep 30
