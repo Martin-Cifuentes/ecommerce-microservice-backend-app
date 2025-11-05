@@ -24,3 +24,5 @@ if ($container) {
     Write-Host "❌ No se encontró contenedor Jenkins" -ForegroundColor Red
 }
 
+
+

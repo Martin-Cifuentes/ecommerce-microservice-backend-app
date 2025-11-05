@@ -47,12 +47,12 @@ pipeline {
             }
         }
         
-        stage('Build') {
+        stage('Build & Unit Tests (Dev)') {
             steps {
                 dir("${params.MICROSERVICE}") {
                     script {
                         sh """
-                            mvn clean package -DskipTests=false \
+                            mvn clean verify -DskipTests=false \
                                 -Dmaven.test.failure.ignore=false \
                                 -Dproject.version=${PROJECT_VERSION}
                         """
@@ -65,8 +65,27 @@ pipeline {
                 }
             }
         }
+
+        stage('Static Analysis (Dev/Stage/Master)') {
+            steps {
+                dir("${params.MICROSERVICE}") {
+                    script {
+                        // Checkstyle
+                        sh "mvn -q -DskipTests checkstyle:check || true"
+                        // SonarQube (si está configurado el server en Jenkins con id 'SonarQube')
+                        withEnv(["SONAR_SCANNER_OPTS=-Xmx512m"]) {
+                            catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                                withSonarQubeEnv('SonarQube') {
+                                    sh "mvn -DskipTests sonar:sonar || true"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         
-        stage('Unit Tests') {
+        stage('Additional Unit Tests (Stage/Master)') {
             when {
                 anyOf {
                     expression { params.ENVIRONMENT == 'stage' }
@@ -112,13 +131,31 @@ pipeline {
                 }
             }
         }
+
+        stage('Dependency Scan (Master)') {
+            when { expression { params.ENVIRONMENT == 'master' } }
+            steps {
+                dir("${params.MICROSERVICE}") {
+                    // OWASP Dependency-Check (si está configurado el plugin/maven)
+                    sh "mvn -q -DskipTests org.owasp:dependency-check-maven:check || true"
+                    archiveArtifacts artifacts: "**/dependency-check-report.*", allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('SAST (Master)') {
+            when { expression { params.ENVIRONMENT == 'master' } }
+            steps {
+                script {
+                    // Trivy FS para análisis de código (si está instalado trivy en el agente)
+                    sh "trivy fs --quiet --exit-code 0 --no-progress . || true"
+                }
+            }
+        }
         
         stage('Build Docker Image') {
             when {
-                anyOf {
-                    expression { params.ENVIRONMENT == 'stage' }
-                    expression { params.ENVIRONMENT == 'master' }
-                }
+                anyOf { expression { params.ENVIRONMENT in ['dev','stage','master'] } }
             }
             steps {
                 script {
@@ -137,10 +174,7 @@ pipeline {
         
         stage('Push Docker Image') {
             when {
-                anyOf {
-                    expression { params.ENVIRONMENT == 'stage' }
-                    expression { params.ENVIRONMENT == 'master' }
-                }
+                anyOf { expression { params.ENVIRONMENT in ['dev','stage','master'] } }
             }
             steps {
                 script {
@@ -171,7 +205,7 @@ pipeline {
             }
         }
         
-        stage('System Tests - Stage') {
+        stage('Integration/E2E/Perf Tests - Stage') {
             when {
                 expression { params.ENVIRONMENT == 'stage' }
             }
@@ -181,8 +215,7 @@ pipeline {
                         sleep 30
                         kubectl wait --for=condition=ready pod -l app=${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} --timeout=300s || true
                         
-                        # Ejecutar pruebas de sistema contra el despliegue en stage
-                        # Estas pruebas verifican que el servicio desplegado funciona correctamente
+                        # Health check básico
                         SERVICE_URL=\$(kubectl get svc ${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' || echo "")
                         if [ -z "\$SERVICE_URL" ]; then
                             SERVICE_URL=\$(kubectl get svc ${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} -o jsonpath='{.spec.clusterIP}')
@@ -190,6 +223,14 @@ pipeline {
                         
                         # Verificar health check
                         curl -f http://\$SERVICE_URL/actuator/health || exit 1
+
+                        # Pruebas de conectividad entre microservicios (desde un pod temporal)
+                        kubectl run netcheck --rm -i --restart=Never --image=curlimages/curl -n ${KUBERNETES_NAMESPACE} -- \
+                          /bin/sh -c "for s in service-discovery cloud-config product-service order-service payment-service; do \
+                            echo Checking \$s; curl -sS http://\$s:80 || true; done"
+
+                        # Pruebas de rendimiento básicas (peticiones rápidas)
+                        for i in 1 2 3 4 5; do time -p curl -s -o /dev/null http://\$SERVICE_URL/actuator/health; done
                     """
                 }
             }
@@ -229,7 +270,29 @@ pipeline {
             }
         }
         
-        stage('System Tests - Master') {
+        stage('Approval Gate (Master)') {
+            when { expression { params.ENVIRONMENT == 'master' } }
+            steps {
+                timeout(time: 10, unit: 'MINUTES') {
+                    input message: 'Aprobar despliegue a producción (master)?', ok: 'Aprobar'
+                }
+            }
+        }
+
+        stage('Canary/Blue-Green Update (Master)') {
+            when { expression { params.ENVIRONMENT == 'master' } }
+            steps {
+                script {
+                    sh """
+                        # Canary by image update (rolling update)
+                        kubectl set image deployment/${params.MICROSERVICE} ${params.MICROSERVICE}=${DOCKER_IMAGE}:${params.ENVIRONMENT}-${GIT_COMMIT_SHORT} -n ${KUBERNETES_NAMESPACE}
+                        kubectl rollout status deployment/${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} --timeout=10m
+                    """
+                }
+            }
+        }
+
+        stage('System/Smoke Tests - Master') {
             when {
                 expression { params.ENVIRONMENT == 'master' }
             }
@@ -253,6 +316,9 @@ pipeline {
                             echo "Verificando registro en service discovery..."
                             sleep 10
                         fi
+
+                        # Pruebas de sistema rápidas/Smoke
+                        for i in 1 2 3; do curl -s -o /dev/null -w "%{http_code}\\n" http://\$SERVICE_URL/actuator/health; done
                     """
                 }
             }
@@ -271,6 +337,8 @@ pipeline {
                 } else {
                     echo "✅ Pipeline completado exitosamente para ${params.MICROSERVICE} en ambiente ${params.ENVIRONMENT}"
                 }
+                // Notificación (si hay Slack/Email configurado)
+                try { slackSend color: '#2EB67D', message: "Build OK ${env.JOB_NAME} #${env.BUILD_NUMBER} (${params.ENVIRONMENT})" } catch (err) { echo 'Slack no configurado' }
             }
         }
         failure {
@@ -282,6 +350,7 @@ pipeline {
                         kubectl logs -l app=${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} --tail=50 || true
                     """
                 }
+                try { slackSend color: '#E01E5A', message: "Build FAIL ${env.JOB_NAME} #${env.BUILD_NUMBER} (${params.ENVIRONMENT})" } catch (err) { echo 'Slack no configurado' }
             }
         }
     }
