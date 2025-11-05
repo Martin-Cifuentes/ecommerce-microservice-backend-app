@@ -22,6 +22,11 @@ pipeline {
         KUBERNETES_NAMESPACE = "${params.ENVIRONMENT}"
     }
     
+    tools {
+        jdk 'JDK-11'
+        maven 'Maven-3'
+    }
+    
     // Nota: Si deseas usar herramientas administradas por Jenkins,
     // configura JDK y Maven en Manage Jenkins → Tools y reintroduce el bloque 'tools'
     
@@ -38,6 +43,10 @@ pipeline {
                         script: 'git rev-parse --abbrev-ref HEAD',
                         returnStdout: true
                     ).trim()
+                    // Forzar JDK 11 en PATH para evitar usar Java 17 del contenedor de Jenkins
+                    def jdkHome = tool name: 'JDK-11', type: 'jdk'
+                    env.JAVA_HOME = jdkHome
+                    env.PATH = "${jdkHome}/bin:${env.PATH}"
                 }
             }
         }
@@ -47,7 +56,11 @@ pipeline {
                 dir("${params.MICROSERVICE}") {
                     script {
                         sh """
+                            echo Using JAVA_HOME=\"$JAVA_HOME\"
+                            which java || true
+                            java -version || true
                             chmod +x mvnw || true
+                            ./mvnw -v || true
                             ./mvnw clean verify -DskipTests=false \
                                 -Dmaven.test.failure.ignore=false \
                                 -Dproject.version=${PROJECT_VERSION}
