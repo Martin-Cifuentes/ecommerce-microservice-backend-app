@@ -343,3 +343,5 @@ Una vez que todo funcione:
 4. **Seguridad**: Implementar escaneo de vulnerabilidades en imágenes
 5. **Rollback**: Implementar estrategias de rollback automático
 
+
+

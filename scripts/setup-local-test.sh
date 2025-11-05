@@ -96,3 +96,5 @@ echo "  5. Prueba con ambiente DEV primero"
 echo ""
 echo "📖 Revisa GUIA-PRUEBAS-JENKINS.md para instrucciones detalladas"
 
+
+
