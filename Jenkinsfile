@@ -47,7 +47,8 @@ pipeline {
                 dir("${params.MICROSERVICE}") {
                     script {
                         sh """
-                            mvn clean verify -DskipTests=false \
+                            chmod +x mvnw || true
+                            ./mvnw clean verify -DskipTests=false \
                                 -Dmaven.test.failure.ignore=false \
                                 -Dproject.version=${PROJECT_VERSION}
                         """
@@ -65,16 +66,8 @@ pipeline {
             steps {
                 dir("${params.MICROSERVICE}") {
                     script {
-                        // Checkstyle
-                        sh "mvn -q -DskipTests checkstyle:check || true"
-                        // SonarQube (si está configurado el server en Jenkins con id 'SonarQube')
-                        withEnv(["SONAR_SCANNER_OPTS=-Xmx512m"]) {
-                            catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                                withSonarQubeEnv('SonarQube') {
-                                    sh "mvn -DskipTests sonar:sonar || true"
-                                }
-                            }
-                        }
+                        // Checkstyle (sin depender de SonarQube por ahora)
+                        sh "chmod +x mvnw || true && ./mvnw -q -DskipTests checkstyle:check || true"
                     }
                 }
             }
@@ -91,7 +84,8 @@ pipeline {
                 dir("${params.MICROSERVICE}") {
                     script {
                         sh """
-                            mvn surefire:test \
+                            chmod +x mvnw || true
+                            ./mvnw surefire:test \
                                 -Dmaven.test.failure.ignore=false
                         """
                     }
@@ -112,7 +106,8 @@ pipeline {
                 dir("${params.MICROSERVICE}") {
                     script {
                         sh """
-                            mvn failsafe:integration-test failsafe:verify \
+                            chmod +x mvnw || true
+                            ./mvnw failsafe:integration-test failsafe:verify \
                                 -Dmaven.test.failure.ignore=false
                         """
                     }
@@ -129,8 +124,8 @@ pipeline {
             when { expression { params.ENVIRONMENT == 'master' } }
             steps {
                 dir("${params.MICROSERVICE}") {
-                    // OWASP Dependency-Check (si está configurado el plugin/maven)
-                    sh "mvn -q -DskipTests org.owasp:dependency-check-maven:check || true"
+                    // OWASP Dependency-Check (descarga el plugin desde Maven Central)
+                    sh "chmod +x mvnw || true && ./mvnw -q -DskipTests org.owasp:dependency-check-maven:check || true"
                     archiveArtifacts artifacts: "**/dependency-check-report.*", allowEmptyArchive: true
                 }
             }
@@ -339,7 +334,7 @@ pipeline {
                     echo "✅ Pipeline completado exitosamente para ${params.MICROSERVICE} en ambiente ${params.ENVIRONMENT}"
                 }
                 // Notificación (si hay Slack/Email configurado)
-                try { slackSend color: '#2EB67D', message: "Build OK ${env.JOB_NAME} #${env.BUILD_NUMBER} (${params.ENVIRONMENT})" } catch (err) { echo 'Slack no configurado' }
+                // Notificaciones Slack deshabilitadas por defecto (plugin no instalado)
             }
         }
         failure {
@@ -351,7 +346,7 @@ pipeline {
                         kubectl logs -l app=${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} --tail=50 || true
                     """
                 }
-                try { slackSend color: '#E01E5A', message: "Build FAIL ${env.JOB_NAME} #${env.BUILD_NUMBER} (${params.ENVIRONMENT})" } catch (err) { echo 'Slack no configurado' }
+                // Notificaciones Slack deshabilitadas
             }
         }
     }
