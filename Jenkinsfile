@@ -16,19 +16,14 @@ pipeline {
     
     environment {
         PROJECT_VERSION = '0.1.0'
-        DOCKER_REGISTRY = credentials('docker-registry-url') ?: 'selimhorri'
-        DOCKER_IMAGE = "${DOCKER_REGISTRY}/${params.MICROSERVICE}-ecommerce-boot"
+        // Usa tu namespace/usuario de Docker Hub aquí (por defecto: 'selimhorri')
+        DOCKER_REPO = 'selimhorri'
+        DOCKER_IMAGE = "${DOCKER_REPO}/${params.MICROSERVICE}-ecommerce-boot"
         KUBERNETES_NAMESPACE = "${params.ENVIRONMENT}"
-        JAVA_HOME = tool name: 'JDK-11', type: 'jdk'
-        MAVEN_HOME = tool name: 'Maven-3', type: 'maven'
-        PATH = "${MAVEN_HOME}/bin:${JAVA_HOME}/bin:${env.PATH}"
-        KUBECONFIG = credentials('kubeconfig') ?: ''
     }
     
-    tools {
-        jdk 'JDK-11'
-        maven 'Maven-3'
-    }
+    // Nota: Si deseas usar herramientas administradas por Jenkins,
+    // configura JDK y Maven en Manage Jenkins → Tools y reintroduce el bloque 'tools'
     
     stages {
         stage('Checkout') {
@@ -104,8 +99,7 @@ pipeline {
             }
             post {
                 always {
-                    junit testResultsPattern: "${params.MICROSERVICE}/target/surefire-reports/TEST-*.xml"
-                    publishTestResults testResultsPattern: "${params.MICROSERVICE}/target/surefire-reports/TEST-*.xml"
+                    junit testResults: "${params.MICROSERVICE}/target/surefire-reports/TEST-*.xml"
                 }
             }
         }
@@ -126,8 +120,7 @@ pipeline {
             }
             post {
                 always {
-                    junit testResultsPattern: "${params.MICROSERVICE}/target/failsafe-reports/TEST-*.xml"
-                    publishTestResults testResultsPattern: "${params.MICROSERVICE}/target/failsafe-reports/TEST-*.xml"
+                    junit testResults: "${params.MICROSERVICE}/target/failsafe-reports/TEST-*.xml"
                 }
             }
         }
@@ -180,7 +173,7 @@ pipeline {
                 script {
                     withCredentials([usernamePassword(credentialsId: 'docker-registry-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                         sh """
-                            echo \${DOCKER_PASS} | docker login -u \${DOCKER_USER} --password-stdin ${DOCKER_REGISTRY}
+                            echo \${DOCKER_PASS} | docker login -u \${DOCKER_USER} --password-stdin
                             docker push ${DOCKER_IMAGE}:${PROJECT_VERSION}
                             docker push ${DOCKER_IMAGE}:${params.ENVIRONMENT}-${GIT_COMMIT_SHORT}
                             docker push ${DOCKER_IMAGE}:${params.ENVIRONMENT}-latest
@@ -196,11 +189,13 @@ pipeline {
             }
             steps {
                 script {
-                    sh """
-                        kubectl create namespace ${KUBERNETES_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
-                        envsubst < k8s/${params.MICROSERVICE}/deployment-stage.yaml | kubectl apply -f -
-                        kubectl rollout status deployment/${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} --timeout=5m
-                    """
+                    withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                        sh """
+                            kubectl create namespace ${KUBERNETES_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+                            envsubst < k8s/${params.MICROSERVICE}/deployment-stage.yaml | kubectl apply -f -
+                            kubectl rollout status deployment/${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} --timeout=5m
+                        """
+                    }
                 }
             }
         }
@@ -211,27 +206,29 @@ pipeline {
             }
             steps {
                 script {
-                    sh """
-                        sleep 30
-                        kubectl wait --for=condition=ready pod -l app=${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} --timeout=300s || true
-                        
-                        # Health check básico
-                        SERVICE_URL=\$(kubectl get svc ${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' || echo "")
-                        if [ -z "\$SERVICE_URL" ]; then
-                            SERVICE_URL=\$(kubectl get svc ${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} -o jsonpath='{.spec.clusterIP}')
-                        fi
-                        
-                        # Verificar health check
-                        curl -f http://\$SERVICE_URL/actuator/health || exit 1
+                    withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                        sh """
+                            sleep 30
+                            kubectl wait --for=condition=ready pod -l app=${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} --timeout=300s || true
+                            
+                            # Health check básico
+                            SERVICE_URL=\$(kubectl get svc ${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' || echo "")
+                            if [ -z "\$SERVICE_URL" ]; then
+                                SERVICE_URL=\$(kubectl get svc ${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} -o jsonpath='{.spec.clusterIP}')
+                            fi
+                            
+                            # Verificar health check
+                            curl -f http://\$SERVICE_URL/actuator/health || exit 1
 
-                        # Pruebas de conectividad entre microservicios (desde un pod temporal)
-                        kubectl run netcheck --rm -i --restart=Never --image=curlimages/curl -n ${KUBERNETES_NAMESPACE} -- \
-                          /bin/sh -c "for s in service-discovery cloud-config product-service order-service payment-service; do \
-                            echo Checking \$s; curl -sS http://\$s:80 || true; done"
+                            # Pruebas de conectividad entre microservicios (desde un pod temporal)
+                            kubectl run netcheck --rm -i --restart=Never --image=curlimages/curl -n ${KUBERNETES_NAMESPACE} -- \
+                              /bin/sh -c "for s in service-discovery cloud-config product-service order-service payment-service; do \
+                                echo Checking \$s; curl -sS http://\$s:80 || true; done"
 
-                        # Pruebas de rendimiento básicas (peticiones rápidas)
-                        for i in 1 2 3 4 5; do time -p curl -s -o /dev/null http://\$SERVICE_URL/actuator/health; done
-                    """
+                            # Pruebas de rendimiento básicas (peticiones rápidas)
+                            for i in 1 2 3 4 5; do time -p curl -s -o /dev/null http://\$SERVICE_URL/actuator/health; done
+                        """
+                    }
                 }
             }
         }
@@ -261,11 +258,13 @@ pipeline {
             }
             steps {
                 script {
-                    sh """
-                        kubectl create namespace ${KUBERNETES_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
-                        envsubst < k8s/${params.MICROSERVICE}/deployment-master.yaml | kubectl apply -f -
-                        kubectl rollout status deployment/${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} --timeout=10m
-                    """
+                    withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                        sh """
+                            kubectl create namespace ${KUBERNETES_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+                            envsubst < k8s/${params.MICROSERVICE}/deployment-master.yaml | kubectl apply -f -
+                            kubectl rollout status deployment/${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} --timeout=10m
+                        """
+                    }
                 }
             }
         }
@@ -298,28 +297,30 @@ pipeline {
             }
             steps {
                 script {
-                    sh """
-                        sleep 30
-                        kubectl wait --for=condition=ready pod -l app=${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} --timeout=300s || true
-                        
-                        # Verificar que el servicio está funcionando correctamente
-                        SERVICE_URL=\$(kubectl get svc ${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' || echo "")
-                        if [ -z "\$SERVICE_URL" ]; then
-                            SERVICE_URL=\$(kubectl get svc ${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} -o jsonpath='{.spec.clusterIP}')
-                        fi
-                        
-                        # Health check
-                        curl -f http://\$SERVICE_URL/actuator/health || exit 1
-                        
-                        # Verificar que el servicio está registrado en Eureka (si aplica)
-                        if [ "${params.MICROSERVICE}" != "service-discovery" ] && [ "${params.MICROSERVICE}" != "cloud-config" ]; then
-                            echo "Verificando registro en service discovery..."
-                            sleep 10
-                        fi
+                    withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                        sh """
+                            sleep 30
+                            kubectl wait --for=condition=ready pod -l app=${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} --timeout=300s || true
+                            
+                            # Verificar que el servicio está funcionando correctamente
+                            SERVICE_URL=\$(kubectl get svc ${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' || echo "")
+                            if [ -z "\$SERVICE_URL" ]; then
+                                SERVICE_URL=\$(kubectl get svc ${params.MICROSERVICE} -n ${KUBERNETES_NAMESPACE} -o jsonpath='{.spec.clusterIP}')
+                            fi
+                            
+                            # Health check
+                            curl -f http://\$SERVICE_URL/actuator/health || exit 1
+                            
+                            # Verificar que el servicio está registrado en Eureka (si aplica)
+                            if [ "${params.MICROSERVICE}" != "service-discovery" ] && [ "${params.MICROSERVICE}" != "cloud-config" ]; then
+                                echo "Verificando registro en service discovery..."
+                                sleep 10
+                            fi
 
-                        # Pruebas de sistema rápidas/Smoke
-                        for i in 1 2 3; do curl -s -o /dev/null -w "%{http_code}\\n" http://\$SERVICE_URL/actuator/health; done
-                    """
+                            # Pruebas de sistema rápidas/Smoke
+                            for i in 1 2 3; do curl -s -o /dev/null -w "%{http_code}\\n" http://\$SERVICE_URL/actuator/health; done
+                        """
+                    }
                 }
             }
         }
