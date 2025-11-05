@@ -56,7 +56,6 @@ pipeline {
                 dir("${params.MICROSERVICE}") {
                     script {
                         sh """
-                            echo Using JAVA_HOME=\"$JAVA_HOME\"
                             which java || true
                             java -version || true
                             chmod +x mvnw || true
