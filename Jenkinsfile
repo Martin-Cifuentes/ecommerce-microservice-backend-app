@@ -55,7 +55,10 @@ pipeline {
             steps {
                 dir("${params.MICROSERVICE}") {
                     script {
+                        def jdkHome = tool name: 'JDK-11', type: 'jdk'
                         sh """
+                            export JAVA_HOME=${jdkHome}
+                            export PATH=${jdkHome}/bin:\$PATH
                             which java || true
                             java -version || true
                             chmod +x mvnw || true
